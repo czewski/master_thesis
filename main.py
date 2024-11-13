@@ -20,13 +20,14 @@ import argparse
 from tqdm import tqdm
 from utils import utils, dataset, probability_metrics
 from models import lstm_attention
+import pytorch_warmup as warmup
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_path', default='data/diginetica/', help='dataset directory path: data/diginetica/yoochoose1_4/yoochoose1_64')
-parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
-parser.add_argument('--hidden_size', type=int, default=150, help='hidden state size of gru module')
+parser.add_argument('--batch_size', type=int, default=256, help='input batch size')
+parser.add_argument('--hidden_size', type=int, default=200, help='hidden state size of gru module')
 parser.add_argument('--embed_dim', type=int, default=50, help='the dimension of item embedding')
-parser.add_argument('--epoch', type=int, default=5, help='the number of epochs to train for')
+parser.add_argument('--epoch', type=int, default=25, help='the number of epochs to train for')
 parser.add_argument('--lr', type=float, default=0.001, help='learning rate')  
 parser.add_argument('--lr_dc', type=float, default=0.1, help='learning rate decay rate') #lr * lr_dc
 parser.add_argument('--lr_dc_step', type=int, default=40, help='the number of steps after which the learning rate decay') 
@@ -75,14 +76,19 @@ def main():
                                               args.embed_dim, 
                                               args.batch_size).to(device) 
 
-    optimizer = optim.Adam(params=model.parameters(), 
-                           lr=args.lr)  
+    # optimizer = optim.Adam(params=model.parameters(), 
+    #                        lr=args.lr)  
+    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=0.01)
+    num_steps = len(train_loader) * args.epoch
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+    warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
     
     criterion = nn.CrossEntropyLoss()
 
-    scheduler = StepLR(optimizer, 
-                       step_size = args.lr_dc_step, 
-                       gamma = args.lr_dc)
+    # scheduler = StepLR(optimizer, 
+    #                    step_size = args.lr_dc_step, 
+    #                    gamma = args.lr_dc)
     
     early_stopper = utils.EarlyStopper(patience=5, 
                                        min_delta=10)
@@ -98,8 +104,7 @@ def main():
 
     for epoch in tqdm(range(args.epoch)):
         # Train
-        epoch_loss = trainForEpoch(train_loader, model, optimizer, epoch, args.epoch, criterion, log_aggr = 200)
-        scheduler.step() # epoch = epoch
+        epoch_loss = trainForEpoch(train_loader, model, optimizer, epoch, args.epoch, criterion, warmup_scheduler, lr_scheduler, log_aggr = 200)
         losses.append(epoch_loss)
 
         # Validation       
@@ -143,12 +148,12 @@ def main():
 
     # Save metrics
     model_unique_id = MODEL_VARIATION + timestamp
-    fields=[model_unique_id, test_recall, test_mrr, test_hit,timestamp,(time.time() - now_time),valid_recall, valid_mrr, valid_hit, args.lr, args.hidden_size, args.batch_size, args.embed_dim, args.weight_decay,datasetname, args.epoch, args.topk, args.max_len, args.alignment_function, args.pos_enc, args.knn, args.embeddings, args.folds, best_recall, best_mrr, best_hit, best_epoch]  
+    fields=[model_unique_id, test_recall, test_mrr, test_hit,timestamp,(time.time() - now_time),valid_recall, valid_mrr, valid_hit, args.lr, args.hidden_size, args.batch_size, args.embed_dim, datasetname, args.epoch, args.topk, args.max_len, best_recall, best_mrr, best_hit, best_epoch]  
     with open(r'stats/data.csv', 'a') as f:
         writer = csv.writer(f)
         writer.writerow(fields)
 
-def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion, log_aggr=1):
+def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion, warmup_scheduler, lr_scheduler, log_aggr=1):
     model.train()
     sum_epoch_loss = 0
 
@@ -173,6 +178,9 @@ def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion, 
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
         optimizer.step() 
+        with warmup_scheduler.dampening():
+            #print('stepping')
+            lr_scheduler.step()
 
         loss_val = loss.item()
         sum_epoch_loss += loss_val
