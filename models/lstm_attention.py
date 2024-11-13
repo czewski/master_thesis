@@ -1,9 +1,9 @@
 import torch.nn as nn
+import torch.nn.functional as F
 import torch
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 class LSTMAttentionModel(nn.Module): 
     def __init__(self, n_items, hidden_size, embedding_dim, batch_size, n_layers=1, drop_prob=0.25, num_heads=4):
         super(LSTMAttentionModel, self).__init__()
@@ -32,6 +32,23 @@ class LSTMAttentionModel(nn.Module):
         self.embedding_to_hidden = nn.Linear(embedding_dim, hidden_size)
         self.hidden_to_embedding = nn.Linear(hidden_size, embedding_dim)
         self.output_projection = nn.Linear(hidden_size, hidden_size)  # Project back after multi-head
+
+    def find_closest_tensor(self, query_embeddings):
+      closest_tensors = []
+      
+      for t in range(query_embeddings.size(0)):  # iterate over sequence length
+          # query: (batch_size, dimension) at each time step t
+          query_at_t = query_embeddings[t]
+          data_embeddings = self.embedding.weight.data
+          
+          # Calculate cosine similarity for each batch 
+          dists = 1 - F.cosine_similarity(query_at_t.unsqueeze(1), data_embeddings.unsqueeze(0), dim=-1)
+          min_dist, closest_index = torch.min(dists, dim=1) 
+          closest_tensor = data_embeddings[closest_index] 
+          
+          closest_tensors.append(closest_tensor) 
+      
+      return torch.stack(closest_tensors)
 
     def attention_net(self, lstm_output, padding_mask): 
         batch_size, seq_len, hidden_size = lstm_output.size()
@@ -62,6 +79,11 @@ class LSTMAttentionModel(nn.Module):
     def forward(self, x, lengths):
         x = x.long()
         embs = self.dropout(self.embedding(x))
+
+        closest_tensor = self.find_closest_tensor(self.embedding(x))  # Use KNN to find the closest tensor in the dataset  
+        #closest_tensor = torch.mean(closest_tensor, dim=0) 
+        #print(closest_tensor.size())
+        embs = embs * closest_tensor
 
         # Pack sequence
         embs = pack_padded_sequence(embs, lengths)
