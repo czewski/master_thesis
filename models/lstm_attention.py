@@ -5,7 +5,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class LSTMAttentionModel(nn.Module): 
-    def __init__(self, n_items, hidden_size, embedding_dim, batch_size, n_layers=1, drop_prob=0.25, num_heads=4):
+    def __init__(self, n_items, hidden_size, embedding_dim, batch_size, n_layers=1, drop_prob=0.45, num_heads=2): #drop_prob=0.25
         super(LSTMAttentionModel, self).__init__()
         self.batch_size = batch_size
         self.output_size = n_items
@@ -14,6 +14,7 @@ class LSTMAttentionModel(nn.Module):
         self.num_heads = num_heads
         assert hidden_size % num_heads == 0, "Hidden size must be divisible by num_heads"
         self.head_dim = hidden_size // num_heads
+        self.layer_norm = nn.LayerNorm(hidden_size)
 
         # Embeddings
         self.embedding = nn.Embedding(n_items, embedding_dim, padding_idx=0)
@@ -56,7 +57,8 @@ class LSTMAttentionModel(nn.Module):
 
         # Concatenate heads and project
         weighted = weighted.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_size)
-        multi_head_output = self.output_projection(weighted)  # Linear projection after concatenation
+        #multi_head_output = self.output_projection(weighted)  # Linear projection after concatenation
+        multi_head_output = self.layer_norm(self.output_projection(weighted) + lstm_output)
         return multi_head_output
 
     def forward(self, x, lengths):

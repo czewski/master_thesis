@@ -25,15 +25,16 @@ import pytorch_warmup as warmup
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_path', default='data/diginetica/', help='dataset directory path: data/diginetica/yoochoose1_4/yoochoose1_64')
 parser.add_argument('--batch_size', type=int, default=256, help='input batch size')
-parser.add_argument('--hidden_size', type=int, default=200, help='hidden state size of gru module')
+parser.add_argument('--hidden_size', type=int, default=60, help='hidden state size of gru module')
+parser.add_argument('--heads', type=int, default=2, help='num of heads')
 parser.add_argument('--embed_dim', type=int, default=50, help='the dimension of item embedding')
-parser.add_argument('--epoch', type=int, default=25, help='the number of epochs to train for')
+parser.add_argument('--epoch', type=int, default=50, help='the number of epochs to train for')
 parser.add_argument('--lr', type=float, default=0.001, help='learning rate')  
 parser.add_argument('--lr_dc', type=float, default=0.1, help='learning rate decay rate') #lr * lr_dc
-parser.add_argument('--lr_dc_step', type=int, default=40, help='the number of steps after which the learning rate decay') 
+parser.add_argument('--lr_dc_step', type=int, default=45, help='the number of steps after which the learning rate decay') 
 parser.add_argument('--topk', type=int, default=20, help='number of top score items selected for calculating recall and mrr metrics')
 parser.add_argument('--valid_portion', type=float, default=0.1, help='split the portion of training set as validation set')
-parser.add_argument('--max_len', type=int, default=19, help='max length of sequence')
+parser.add_argument('--max_len', type=int, default=20, help='max length of sequence')
 args = parser.parse_args()
 print(args)
 
@@ -74,15 +75,16 @@ def main():
     model = lstm_attention.LSTMAttentionModel(n_items, 
                                               args.hidden_size, 
                                               args.embed_dim, 
-                                              args.batch_size).to(device) 
+                                              args.batch_size,
+                                              num_heads=args.heads).to(device) 
 
-    # optimizer = optim.Adam(params=model.parameters(), 
-    #                        lr=args.lr)  
+    optimizer = optim.Adam(params=model.parameters(), 
+                           lr=args.lr)  
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=0.01)
-    num_steps = len(train_loader) * args.epoch
-    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
-    warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.999)) #, weight_decay=0.01
+    # num_steps = len(train_loader) * args.epoch
+    # lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+    # warmup_scheduler = warmup.UntunedLinearWarmup(optimizer)
     
     criterion = nn.CrossEntropyLoss()
 
@@ -103,8 +105,8 @@ def main():
     timestamp = now.strftime("%d_%m_%Y_%H:%M:%S")
 
     for epoch in tqdm(range(args.epoch)):
-        # Train
-        epoch_loss = trainForEpoch(train_loader, model, optimizer, epoch, args.epoch, criterion, warmup_scheduler, lr_scheduler, log_aggr = 200)
+        # Train  warmup_scheduler, lr_scheduler,
+        epoch_loss = trainForEpoch(train_loader, model, optimizer, epoch, args.epoch, criterion, log_aggr = 200)
         losses.append(epoch_loss)
 
         # Validation       
@@ -153,7 +155,7 @@ def main():
         writer = csv.writer(f)
         writer.writerow(fields)
 
-def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion, warmup_scheduler, lr_scheduler, log_aggr=1):
+def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion,  log_aggr=1): #warmup_scheduler, lr_scheduler,
     model.train()
     sum_epoch_loss = 0
 
@@ -178,9 +180,9 @@ def trainForEpoch(train_loader, model, optimizer, epoch, num_epochs, criterion, 
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
         optimizer.step() 
-        with warmup_scheduler.dampening():
-            #print('stepping')
-            lr_scheduler.step()
+        # with warmup_scheduler.dampening():
+        #     #print('stepping')
+        #     lr_scheduler.step()
 
         loss_val = loss.item()
         sum_epoch_loss += loss_val
